@@ -149,7 +149,7 @@ task tools          # install pinned goimports, golangci-lint, govulncheck
 
 Re-run after bumping `go.mod`'s `go` directive - `golangci-lint`
 and `govulncheck` refuse to scan code targeting a newer Go than
-they were built against. `GOTOOLCHAIN=go1.25.7` in the recipe
+they were built against. `GOTOOLCHAIN=go1.25.8` in the recipe
 keeps tool binaries pinned to the project's declared toolchain.
 
 ## Other tooling notes
