@@ -1,0 +1,3 @@
+source: mono-600.pbm
+encoder: jbig2enc -s -a (auto-threshold)
+dimensions: 4960x7016

@@ -1,0 +1,62 @@
+*.* text=auto eol=lf
+
+# windows files
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.csproj text eol=crlf
+*.filters text eol=crlf
+*.ini text eol=crlf
+*.nsi text eol=crlf
+*.props text eol=crlf
+*.ps1 text eol=crlf
+*.psd1 text eol=crlf
+*.psm1 text eol=crlf
+*.rc text eol=crlf
+*.reg text eol=crlf
+*.resx text eol=crlf
+*.sln text eol=crlf
+*.targets text eol=crlf
+*.vbs text eol=crlf
+*.vcxproj text eol=crlf
+*.user text eol=crlf
+*.wxs text eol=crlf
+*.xaml text eol=crlf
+
+# binary files
+*.avif binary
+*.bmp binary
+*.compositefont binary
+*.fon binary
+*.gif binary
+*.ico binary
+*.jsdos binary
+*.jb2 binary
+*.jbig binary
+*.jbig2 binary
+*.jp2 binary
+*.jpf binary
+*.jpg binary
+*.jpeg binary
+*.jpeg2000 binary
+*.pdf binary
+*.pfb binary
+*.pgo binary
+*.png binary
+*.otf binary
+*.raw binary
+*.tif binary
+*.ttc binary
+*.ttf binary
+*.wasm binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+
+# vendor / generated
+# Mark generated files so GitHub linguist excludes them from language stats.
+/testdata/** linguist-generated
+
+.gitattributes export-ignore
+.gitignore export-ignore
+.gitempty export-ignore
+.gitkeep export-ignore

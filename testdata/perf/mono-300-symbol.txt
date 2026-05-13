@@ -1,0 +1,3 @@
+source: mono-300.pbm
+encoder: jbig2enc -s (symbol mode)
+dimensions: 2480x3508

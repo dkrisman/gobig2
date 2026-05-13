@@ -1,0 +1,20 @@
+gobig2
+Copyright 2026 Devon Krisman
+
+This product includes software originally developed by
+XIAO QI DUN (https://github.com/xiaoqidun/jbig2),
+licensed under the Apache License, Version 2.0.
+
+This codebase is a fork; the module path is
+github.com/dkrisman/gobig2. The decoder has been
+substantively rewritten across the symbol-dictionary,
+text-region, halftone, refinement, and MMR paths;
+hardening, fuzzing, and resource-budget caps were added
+on top of the upstream baseline.
+
+Test fixtures vendored under testdata/serenityos/ are
+derived from the SerenityOS LibGfx JBIG2 test inputs,
+redistributed under the BSD 2-clause license. The full
+copyright notice and disclaimer required by the BSD-2
+terms travel with the fixtures in
+testdata/serenityos/README.txt.

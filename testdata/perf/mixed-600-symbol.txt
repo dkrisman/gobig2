@@ -1,0 +1,3 @@
+source: mixed-600.pbm
+encoder: jbig2enc -s (symbol mode)
+dimensions: 4960x7016

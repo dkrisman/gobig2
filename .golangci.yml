@@ -1,0 +1,180 @@
+# golangci-lint config (v2 schema)
+# https://golangci-lint.run/usage/configuration/
+#
+# Run: golangci-lint run  (or `task lint` / `task lint:fix`)
+
+version: "2"
+
+run:
+  tests: true
+
+linters:
+  default: none
+  enable:
+    # Correctness
+    - bodyclose       # http response body not closed
+    - contextcheck    # ctx propagation
+    - errcheck        # unchecked errors
+    - errorlint       # %w usage, errors.Is/As migration
+    - gosec           # security issues
+    - govet           # standard go vet checks
+    - ineffassign     # ineffective assignments
+    - nilerr          # returning nil when err is non-nil
+    - rowserrcheck    # sql.Rows.Err not checked
+    - sqlclosecheck   # sql.Rows / sql.Stmt not closed
+    - staticcheck     # bug-finding static analysis
+    - unused          # unused code
+
+    # Style / consistency
+    - gocritic        # opinionated diagnostics
+    - misspell        # American English spelling (locale rule)
+    - revive          # replacement for golint
+    - unconvert       # unnecessary type conversions
+    - whitespace      # leading/trailing blank lines
+
+    # Complexity
+    - gocognit        # cognitive complexity
+    - gocyclo         # cyclomatic complexity
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+
+    gocognit:
+      # JBIG2 segment-parser bodies (parseSymbolDictInner,
+      # parseTextRegion, decodeTemplate*Unopt, MMR uncompress2D,
+      # SDDProc.DecodeHuffman) are inherently complex - each
+      # maps directly to a spec section with many branches. The
+      # bar is high enough to flag accidental complexity in new
+      # helpers without forcing a rewrite of paths that have
+      # been corpus- and fuzz-validated. Reassess if a refactor
+      # lands. Current ceiling 250 covers the worst case
+      # (DecodeHuffman at 197) with headroom; new code that
+      # trips this limit should be split.
+      min-complexity: 250
+
+    gocyclo:
+      # Same rationale as gocognit. Worst current case is
+      # parseTextRegion at 69; threshold 80 keeps that legal
+      # while flagging new functions that grow into territory
+      # where they'd benefit from extraction.
+      min-complexity: 80
+
+    gosec:
+      excludes:
+        - G104  # duplicates errcheck
+        # G115: "integer overflow conversion" - fires 197 times
+        # on JBIG2's wire-format integer narrowing
+        # (uint32 <-> int32, int <-> uint32, etc.). These are
+        # spec-mandated conversions on bytes the decoder has
+        # already bounds-checked against MaxImageSize and the
+        # per-region [Limits]; treating each as a security risk
+        # drowns the actionable findings. The spec uses a
+        # 32-bit-wide universe and we narrow at boundaries.
+        - G115
+
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment  # noisy, low signal
+
+    gocritic:
+      disabled-checks:
+        # captLocal: JBIG2 spec variable names are uppercase
+        # (SBNUMSYMS, SI, TI, WI, HI, etc.). Forcing lowercase
+        # would make the code drift from the spec; cross-
+        # referencing T.88 / ISO 14492 is more important than
+        # Go's conventional case style for these locals.
+        - captLocal
+        # ifElseChain: range-based dispatch (e.g. runcode value
+        # buckets in DecodeSymbolIDHuffmanTable) reads more
+        # naturally as if/else than as a switch over arbitrary
+        # subranges.
+        - ifElseChain
+
+    misspell:
+      locale: US
+
+    revive:
+      rules:
+        - name: exported # exported identifiers need doc comments
+        - name: error-return
+        - name: error-naming
+        - name: error-strings
+        - name: var-naming
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        # indent-error-flow disabled. The codebase's parser
+        # bodies use the `if val, err := ...; err != nil { return
+        # ResultFailure } else { use(val) }` shape consistently
+        # - flattening 48 sites is mechanical churn for no
+        # readability gain in code that mirrors the JBIG2 spec
+        # section-by-section. Re-enable if a future refactor
+        # restructures these.
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unreachable-code
+        - name: redefines-builtin-id
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - std-error-handling
+    rules:
+      # Test files: relax noisy / overly-strict checks. Tests legitimately
+      # swallow errors, grow long table-driven loops, and trip security
+      # heuristics on synthetic inputs.
+      - linters:
+          - errcheck
+          - gocognit
+          - gocyclo
+          - gosec
+        path: _test\.go
+
+      # Main packages: relax the exported-comment rule. cmd/<name>/main.go
+      # doesn't expose API; revive's "exported" rule is for libraries.
+      - linters:
+          - revive
+        path: cmd/.*/main\.go
+        text: exported
+
+      # SegmentFlags is re-exported from the root public API; renaming
+      # would break the API surface.
+      # Accept the stutter for the public alias's source type.
+      - linters:
+          - revive
+        path: internal/segment/segment\.go
+        text: 'segment\.SegmentFlags.*stutters'
+    paths:
+      - testdata
+      - data
+      - vendor
+      - third_party$
+      - builtin$
+      - examples$
+      - external
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofumpt    # stricter gofmt
+    - goimports  # import grouping
+  settings:
+    gofumpt:
+      extra-rules: true
+    goimports:
+      local-prefixes:
+        - github.com/dkrisman/gobig2
+  exclusions:
+    generated: lax
+    paths:
+      - testdata
+      - tmp

@@ -1,0 +1,3 @@
+source:    bitmap-symbol-textrefine-negative-delta-width.pdf
+object:    5
+dimensions: 399x400

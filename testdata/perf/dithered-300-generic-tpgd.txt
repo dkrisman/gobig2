@@ -1,0 +1,3 @@
+source: dithered-300.pbm
+encoder: jbig2enc -d (TPGD)
+dimensions: 2480x3508

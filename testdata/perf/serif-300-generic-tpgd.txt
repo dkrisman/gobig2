@@ -1,0 +1,3 @@
+source: serif-300.pbm
+encoder: jbig2enc -d (TPGD duplicate-line removal)
+dimensions: 2480x3508

@@ -1,0 +1,385 @@
+# https://taskfile.dev
+#
+# Canonical command runner for this repo. Contributors should
+# prefer Unix-style tools available by default in 
+# Linux, Mac, and Windows (Git Bash).
+#
+# Install:
+#   go install github.com/go-task/task/v3/cmd/task@v3.50.0
+#
+# Discover:
+#   task --list
+#
+# Keep recipe definitions here; keep reasoning (which packages, 
+# how to interpret failures, when to update goldens) in docs.
+#
+# Growing this file: when a command is long, repeated, or fiddly to
+# remember, add it here. Rough threshold - if you'd type it more than
+# twice or it has more than two flags, it earns a recipe. Examples of
+# things to add per project:
+#
+#   - integration / e2e test targets that need env vars, fixtures, or
+#     docker compose
+#   - release / publish steps (sign, tag, push, draft notes)
+#   - data regeneration (download, transform, commit)
+#   - profile / trace / debug invocations
+#   - DB migration verbs (up, down, status, fresh)
+#
+# Recipes that wrap a single short command (`task ls -> ls`) are
+# noise; skip those. Recipes that encode the project's flag
+# conventions are gold.
+
+version: "3"
+
+# Build tags this project ships. Append more as the project grows. CI
+# must run every combination - see docs/TESTING.md.
+vars:
+  TAGS: ""
+  GOIMPORTS_VERSION: v0.44.0
+  GOLANGCI_LINT_VERSION: v2.12.1
+  GOVULNCHECK_VERSION: v1.3.0
+
+tasks:
+  default:
+    desc: list available tasks
+    cmds: [task --list]
+    silent: true
+
+  commitpush:
+    desc: stage all changes (incl. new files), commit with the passed message, then push
+    # Canonical "ship this" verb
+    # `git add -A` picks up new files (`git commit -a` alone
+    # would skip them), so a perf workflow / new test fixture /
+    # generated artifact never silently slips off the commit
+    # because it wasn't `git add`'d first.
+    cmds:
+      - git add -A
+      - git commit -m "$(echo {{.CLI_ARGS}})"
+      - git push
+  # --- formatting ---------------------------------------------------------
+
+  fmt:
+    desc: format the tree (applies every formatter enabled in .golangci.yml)
+    # Uses `golangci-lint fmt` so the same set of formatters that
+    # `task lint` checks (gofumpt + goimports today) is what
+    # actually rewrites files. Calling formatters individually here
+    # would let `task fmt` produce code that `task lint` then
+    # rejects - asymmetry is a bug.
+    cmds:
+      - golangci-lint fmt
+
+  fmt:check:
+    desc: fail if any file would be reformatted (CI-friendly)
+    # Same formatters as `task fmt`, just non-destructive: --diff
+    # prints the proposed rewrite and exits non-zero on any change.
+    cmds:
+      - golangci-lint fmt --diff
+
+  # --- correctness --------------------------------------------------------
+
+  vet:
+    desc: go vet with the project's build tags
+    cmds:
+      - go vet {{if .TAGS}}-tags {{.TAGS}}{{end}} ./...
+
+  test:
+    desc: run all tests
+    cmds:
+      - go test {{if .TAGS}}-tags {{.TAGS}}{{end}} ./...
+
+  test:race:
+    desc: run tests under the race detector (requires CGO)
+    env:
+      CGO_ENABLED: "1"
+    cmds:
+      - go test -race {{if .TAGS}}-tags {{.TAGS}}{{end}} ./...
+
+  test:conformance:
+    desc: run JBIG2 corpus tests against bundled testdata/serenityos/ (always) and external ITU-T T.88 conformance corpus if JBIG2_CONFORMANCE_DIR is set
+    # Both env vars are pass-through, never defaulted. The Go
+    # test code already has the right behavior:
+    #
+    #   - TestSerenityOSCorpus falls back to bundled
+    #     testdata/serenityos/ when JBIG2_SERENITYOS_DIR is
+    #     unset, so it ALWAYS runs against the committed fixtures
+    #     on a fresh clone. Setting the env var points at a
+    #     larger or fresher upstream copy.
+    #   - TestConformanceCorpus skips cleanly when
+    #     JBIG2_CONFORMANCE_DIR is unset. The diagnostic before
+    #     the test invocation makes the skip visible. Avoid
+    #     defaulting either env var to a maintainer-local path:
+    #     a fresh clone would then pass the recipe while
+    #     silently skipping every corpus.
+    #
+    # -count=1 disables test-result caching: corpus state on
+    # disk can change without the test source changing, and a
+    # cached "pass" hides that.
+    cmds:
+      - cmd: |
+          if [ -z "${JBIG2_CONFORMANCE_DIR:-}" ]; then
+            echo "test:conformance: JBIG2_CONFORMANCE_DIR is unset; ITU-T T.88 Annex A corpus will skip. Bundled SerenityOS testdata/serenityos/ still runs."
+          else
+            echo "test:conformance: ITU-T T.88 Annex A corpus at $JBIG2_CONFORMANCE_DIR"
+          fi
+          if [ -n "${JBIG2_SERENITYOS_DIR:-}" ]; then
+            echo "test:conformance: SerenityOS corpus override at $JBIG2_SERENITYOS_DIR"
+          else
+            echo "test:conformance: SerenityOS corpus at bundled testdata/serenityos/"
+          fi
+      - go test -count=1 -timeout 5m -run 'TestConformanceCorpus|TestSerenityOSCorpus' -v {{if .TAGS}}-tags {{.TAGS}}{{end}} ./internal/gobig2test
+
+  cover:
+    desc: run tests with coverage
+    cmds:
+      - go test -cover {{if .TAGS}}-tags {{.TAGS}}{{end}} ./...
+
+  cover:html:
+    desc: open per-line HTML coverage report
+    cmds:
+      - go test -coverprofile=coverage.out {{if .TAGS}}-tags {{.TAGS}}{{end}} ./...
+      - go tool cover -html=coverage.out
+
+  cover:func:
+    desc: per-function coverage report
+    cmds:
+      - go test -coverprofile=coverage.out {{if .TAGS}}-tags {{.TAGS}}{{end}} ./...
+      - go tool cover -func=coverage.out
+
+  lint:
+    desc: golangci-lint (config in .golangci.yml)
+    cmds:
+      - golangci-lint run
+
+  lint:fix:
+    desc: golangci-lint with --fix (auto-applies gofumpt, goimports, etc.)
+    cmds:
+      - golangci-lint run --fix
+
+  vuln:
+    desc: govulncheck CVE scan
+    cmds:
+      - govulncheck ./...
+
+  modverify:
+    desc: verify go.sum matches downloaded module zips (supply-chain check)
+    cmds:
+      - go mod verify
+
+  # --- composite gates ----------------------------------------------------
+
+  check:
+    desc: full pre-commit gate (modverify + vet + test + lint + vuln)
+    cmds:
+      - task: modverify
+      - task: vet
+      - task: test
+      - task: lint
+      - task: vuln
+
+  ci:
+    desc: what CI runs (fmt:check + check + test:race + test:scripts)
+    cmds:
+      - task: fmt:check
+      - task: check
+      - task: test:race
+      - task: test:scripts
+
+  # --- build / release ----------------------------------------------------
+
+  build:
+    desc: build all binaries
+    cmds:
+      - go build {{if .TAGS}}-tags {{.TAGS}}{{end}} ./...
+
+  build:release:
+    desc: stripped release binaries in ./bin/. Pass VERSION=v1.2.3 to set main.version. Targets x86-64-v3 by default (Haswell+, 2013+).
+    # `-s -w` strips the symbol table + DWARF (~30% smaller binary).
+    # `-X main.version=...` injects the version string read by
+    # the `version` variable in cmd/<name>/main.go. VERSION defaults to "dev"
+    # so the recipe is callable without a release tag (e.g. for
+    # smoke-testing the release build locally).
+    # `-o ./bin/ ./cmd/...` builds every cmd/<name>/ binary into ./bin/.
+    # Plain `go build ./...` only verifies compilation - no disk output.
+    # GOAMD64=v3 enables AVX2 / BMI1 / BMI2 / FMA codegen. The
+    # default v1 is Pentium-4 era x86-64; v3 is Haswell+ (2013+)
+    # which is a reasonable floor for a 2026+ Go tool. Override
+    # to v1 if you need older hardware support
+    # (`GOAMD64=v1 task build:release`). v3 measured -1.9 % on
+    # mono-600-generic CLI; small but free.
+    vars:
+      VERSION: '{{.VERSION | default "dev"}}'
+      GOAMD64: '{{.GOAMD64 | default "v3"}}'
+    env:
+      GOAMD64: '{{.GOAMD64}}'
+    cmds:
+      - go build -o ./bin/ {{if .TAGS}}-tags {{.TAGS}}{{end}} -ldflags="-s -w -X main.version={{.VERSION}}" ./cmd/...
+
+  # --- test fixtures ------------------------------------------------------
+
+  fuzz:
+    desc: short fuzz smoke run on every Fuzz* target (FUZZTIME=3s default)
+    vars:
+      FUZZTIME: "{{.FUZZTIME | default \"3s\"}}"
+    cmds:
+      # `go list` and `go test` both need -tags so tag-gated packages
+      # and tag-gated Fuzz* targets are discovered.
+      - cmd: |
+          for pkg in $(go list {{if .TAGS}}-tags {{.TAGS}}{{end}} ./...); do
+            for fn in $(go test -list 'Fuzz.*' {{if .TAGS}}-tags {{.TAGS}}{{end}} "$pkg" 2>/dev/null | grep '^Fuzz' || true); do
+              echo "==> fuzzing $pkg::$fn for {{.FUZZTIME}}"
+              go test -run=^$ -fuzz="^$fn\$" -fuzztime={{.FUZZTIME}} {{if .TAGS}}-tags {{.TAGS}}{{end}} "$pkg"
+            done
+          done
+
+  fuzz:long:
+    desc: sustained fuzz run (FUZZTIME=10m default; pass FUZZTIME=1h for an overnight pass)
+    # Same loop as `task fuzz` but with a default budget tuned for
+    # CI's nightly schedule. New public API fuzz-found inputs land in
+    # internal/gobig2test/testdata/fuzz/<TestName>/<hash>; commit
+    # the failing ones so go test (without -fuzz) replays them as
+    # regression seeds.
+    vars:
+      FUZZTIME: "{{.FUZZTIME | default \"10m\"}}"
+    cmds:
+      - cmd: |
+          for pkg in $(go list {{if .TAGS}}-tags {{.TAGS}}{{end}} ./...); do
+            for fn in $(go test -list 'Fuzz.*' {{if .TAGS}}-tags {{.TAGS}}{{end}} "$pkg" 2>/dev/null | grep '^Fuzz' || true); do
+              echo "==> fuzzing $pkg::$fn for {{.FUZZTIME}}"
+              go test -run=^$ -fuzz="^$fn\$" -fuzztime={{.FUZZTIME}} {{if .TAGS}}-tags {{.TAGS}}{{end}} "$pkg"
+            done
+          done
+
+  bench:
+    desc: run benchmarks (skips normal tests)
+    cmds:
+      - go test -bench=. -benchmem -run=^$ {{if .TAGS}}-tags {{.TAGS}}{{end}} ./...
+
+  bench:cross:
+    desc: cross-decoder wall-clock bench vs jbig2dec, mutool, pdfimages, pdfbox (Linux-leaning; missing decoders skip cleanly)
+    # Mirrors what .github/workflows/perf-linux.yml does on CI -
+    # builds the gobig2 CLI, builds the orchestrator, runs over
+    # the bundled SerenityOS subset, and writes Markdown + JSON
+    # to ./tmp/perf/. Decoders missing from PATH (likely the
+    # case on a dev machine without `apt install jbig2dec
+    # mupdf-tools poppler-utils`) get a "skip" cell instead of
+    # failing the run, so this recipe is callable on any OS as
+    # a gobig2-only smoke test.
+    #
+    # Optional vars (pass as e.g. `task bench:cross PDFBOX_JAR=...`):
+    #
+    #   PDFBOX_JAR    path to pdfbox-app-3.x.y.jar (empty -> skipped)
+    #   CORPUS_DIR    directory of synthesized fixtures produced
+    #                 by `task bench:corpus` (or any compatible
+    #                 NAME.jb2 + NAME.txt + optional
+    #                 NAME-embedded.jb2 layout). Empty -> bundled
+    #                 SerenityOS fixtures only.
+    #   OUTPUT_FORMAT pbm (default) or png. pbm makes the cell
+    #                 value track decode work; png includes encoder
+    #                 overhead (Go image/png vs libpng). pbm forces
+    #                 pdfbox to skip - Java ImageIO has no PBM
+    #                 writer.
+    #   ITERS         iterations per cell (default 5)
+    #   WARMUP        warmup iterations per cell (default 1)
+    vars:
+      PDFBOX_JAR: '{{.PDFBOX_JAR | default ""}}'
+      CORPUS_DIR: '{{.CORPUS_DIR | default ""}}'
+      OUTPUT_FORMAT: '{{.OUTPUT_FORMAT | default "pbm"}}'
+      ITERS: '{{.ITERS | default "5"}}'
+      WARMUP: '{{.WARMUP | default "1"}}'
+    env:
+      # Match build:release for the gobig2 binary so the cross-
+      # decoder bench sees the same code the release ships
+      # (PGO + v3-class codegen). perf-cross is build-time
+      # neutral; v3 here keeps it consistent.
+      GOAMD64: v3
+    cmds:
+      - mkdir -p ./bin ./tmp/perf
+      - go build -o ./bin/gobig2 ./cmd/gobig2
+      - go build -o ./bin/perf-cross ./cmd/perf-cross
+      - ./bin/perf-cross
+        -gobig2-bin=./bin/gobig2
+        {{if .PDFBOX_JAR}}-pdfbox-jar={{.PDFBOX_JAR}}{{end}}
+        {{if .CORPUS_DIR}}-extra-corpus-dir={{.CORPUS_DIR}}{{end}}
+        -output-format={{.OUTPUT_FORMAT}}
+        -iters={{.ITERS}}
+        -warmup={{.WARMUP}}
+        -out-md=./tmp/perf/cross-decoder.md
+        -out-json=./tmp/perf/cross-decoder.json
+      - cat ./tmp/perf/cross-decoder.md
+
+  bench:corpus:
+    desc: synthesize large JBIG2 fixtures (~600 dpi A4) for bench:cross. Linux/macOS only; needs jbig2enc + imagemagick.
+    # Wrapper around scripts/perf/synthesize-corpus.sh so local
+    # devs use the same fixture-build path CI does. Output lands
+    # under ./tmp/perf-corpus/ matching the workflow's default.
+    # Re-run safe; the script overwrites in place.
+    vars:
+      CORPUS_DIR: '{{.CORPUS_DIR | default "./tmp/perf-corpus"}}'
+    cmds:
+      - bash scripts/perf/synthesize-corpus.sh {{.CORPUS_DIR}}
+
+  bench:perf:
+    desc: in-process Go bench over the testdata/perf fixture matrix (27 ~600/300 dpi A4 JBIG2 pages, generic / generic+TPGD / symbol-mode + classifier-tuning specials).
+    # Fixtures live in testdata/perf/ (checked in). Rebuild
+    # them with `task bench:perf-rebuild` after touching the
+    # generator script.
+    vars:
+      BENCHTIME: '{{.BENCHTIME | default "1x"}}'
+    cmds:
+      - go test -run=^$ -bench=BenchmarkPerfCorpus -benchmem -benchtime={{.BENCHTIME}} ./internal/gobig2test/
+
+  bench:perf-rebuild:
+    desc: regenerate testdata/perf/*.jb2 from scripts/perf/build-perf-testdata.sh. Linux/macOS only; needs jbig2enc + imagemagick.
+    cmds:
+      - bash scripts/perf/build-perf-testdata.sh
+
+  bench:pgo-rebuild:
+    desc: regenerate cmd/gobig2/default.pgo from a CLI run across the testdata/perf matrix. Re-run after material codec changes so the inliner sees the current hot paths.
+    # PGO profile is checked in (cmd/gobig2/default.pgo) so
+    # fresh clones get the PGO build automatically - Go picks
+    # up default.pgo when present in a main package directory.
+    # Generic-mode wins ~5-7 % wall on big fixtures; symbol
+    # regime is within noise.
+    cmds:
+      - bash scripts/perf/gen-pgo.sh
+
+  # --- tooling ------------------------------------------------------------
+
+  tools:
+    desc: install dev tools (goimports, golangci-lint, govulncheck)
+    # Re-run this after bumping the `go` directive in go.mod -
+    # golangci-lint and govulncheck refuse to load configs / scan
+    # packages that target a newer Go than they were built against.
+    # Symptom: "the Go language version (go1.X) used to build
+    # golangci-lint is lower than the targeted Go version (1.Y)" or
+    # "package requires newer Go version go1.Y (application built
+    # with go1.X)". Fix: `task tools` rebuilds them with current Go.
+    #
+    # GOTOOLCHAIN forces each `go install` to use the same Go
+    # version this project's go.mod declares (1.25.7). Without
+    # this, `go install` resolves the tool's own go.mod
+    # constraint (which may be looser, e.g. >= 1.24) and selects
+    # an older toolchain - producing tool binaries that can't
+    # scan / lint our 1.25-targeted code. Bump this string when
+    # you bump go.mod's `toolchain` directive.
+    env:
+      GOTOOLCHAIN: go1.25.7
+    cmds:
+      - go install golang.org/x/tools/cmd/goimports@{{.GOIMPORTS_VERSION}}
+      # golangci-lint v2 lives under the /v2 module path (Go's
+      # standard convention for major versions >= 2).
+      - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
+      - go install golang.org/x/vuln/cmd/govulncheck@{{.GOVULNCHECK_VERSION}}
+
+  tidy:
+    desc: go mod tidy
+    cmds:
+      - go mod tidy
+
+  clean:
+    desc: remove build artifacts, coverage output, and the test cache
+    cmds:
+      - cmd: rm -rf bin dist .output coverage.out
+      # Test cache invalidation: cached pass results can mask flakes
+      # when only test inputs (not source) change. Clean clean.
+      - go clean -testcache ./...

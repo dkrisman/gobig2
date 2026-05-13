@@ -1,0 +1,58 @@
+*.exe
+*.dll
+*.so
+*.dylib
+/bin/
+
+*.test
+*.out
+/tmp/
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Build output
+dist/
+.output/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+._*
+*.bak
+~*
+*~
+
+# extra git noise
+**/.gitignore
+**/.gitattributes
+!/.gitignore
+!/.gitattributes
+
+# Local overrides
+local.*
+*.local.*
+*.local
+*.lock
+
+# Tool-generated backups
+*.bck.yml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/

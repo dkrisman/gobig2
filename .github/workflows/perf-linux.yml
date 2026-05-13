@@ -1,0 +1,164 @@
+# Cross-decoder JBIG2 performance comparison.
+#
+# Builds the gobig2 CLI, installs jbig2dec (Artifex), mutool
+# (MuPDF), pdfimages (Poppler), and optionally PDFBox (Apache,
+# Java), runs cmd/perf-cross over the bundled SerenityOS corpus
+# plus a synthesized large-fixture set, and publishes:
+#
+#   - Markdown comparison table in $GITHUB_STEP_SUMMARY
+#   - JSON measurement matrix uploaded as a workflow artifact
+#
+# PDFBox is opt-in via the `enable_pdfbox` workflow_dispatch
+# input. Including it triples job runtime (JVM startup + PDFBox's
+# slower JBIG2 path); the default-off keeps the per-push trend
+# table fast while leaving the column reachable for one-off runs.
+#
+# Hosted runners are noisy enough that absolute timings bounce
+# 10-30 % between runs of the same commit; treat the numbers as
+# "did relative ordering shift" not "did we gain 3 %".
+
+name: perf-linux
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      enable_pdfbox:
+        description: "Include PDFBox in the bench (adds ~10 min runtime)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  cross-decoder:
+    name: cross-decoder bench
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      # Pinned to latest stable on 2026-05-12. Bump per
+      # RULES.md / docs/LIBRARIES.md when a newer stable lands.
+      PDFBOX_VERSION: "3.0.7"
+      PERF_OUT_DIR: ./tmp/perf
+      PERF_CORPUS_DIR: ./tmp/perf-corpus
+      # Default-off PDFBox; workflow_dispatch can flip it.
+      ENABLE_PDFBOX: ${{ github.event.inputs.enable_pdfbox == 'true' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@v6.4.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: true
+
+      - name: Set up Java (for PDFBox)
+        if: env.ENABLE_PDFBOX == 'true'
+        uses: actions/setup-java@v5.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install C/native decoders + encoder + fixture deps
+        # Decoders: jbig2dec, mupdf-tools (mutool), poppler-utils
+        # (pdfimages). Fixture build: jbig2 (agl/jbig2enc CLI;
+        # Ubuntu binary package name `jbig2`), imagemagick,
+        # fonts-dejavu-core. Unattended apt to keep CI quiet.
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            jbig2dec \
+            jbig2 \
+            mupdf-tools \
+            poppler-utils \
+            imagemagick \
+            fonts-dejavu-core
+          jbig2dec --version || true
+          jbig2 --help 2>&1 | head -1 || true
+          mutool --version || true
+          pdfimages -v 2>&1 | head -1 || true
+          convert --version 2>&1 | head -1 || true
+
+      - name: Download PDFBox
+        if: env.ENABLE_PDFBOX == 'true'
+        # PDFBox doesn't ship in apt; pull the pdfbox-app fat jar
+        # from the Apache mirror. Pinned by PDFBOX_VERSION above;
+        # checksum verification is a natural follow-up.
+        run: |
+          mkdir -p ./bin
+          curl -fsSL \
+            "https://dlcdn.apache.org/pdfbox/${PDFBOX_VERSION}/pdfbox-app-${PDFBOX_VERSION}.jar" \
+            -o "./bin/pdfbox-app.jar"
+          java -jar ./bin/pdfbox-app.jar --version || true
+
+      - name: Build gobig2 CLI
+        run: |
+          mkdir -p ./bin
+          go build -o ./bin/gobig2 ./cmd/gobig2
+
+      - name: Build perf-cross
+        run: |
+          go build -o ./bin/perf-cross ./cmd/perf-cross
+
+      - name: Cache synthesized perf corpus
+        # Fixtures are deterministic w.r.t. the script + tool
+        # versions; cache hits skip the ~10-20 s encode pass.
+        # Bump the key prefix if the bench methodology changes.
+        id: perf-corpus-cache
+        uses: actions/cache@v5.0.5
+        with:
+          path: ${{ env.PERF_CORPUS_DIR }}
+          key: perf-corpus-v1-${{ runner.os }}-${{ hashFiles('scripts/perf/synthesize-corpus.sh') }}
+
+      - name: Synthesize large fixtures
+        if: steps.perf-corpus-cache.outputs.cache-hit != 'true'
+        run: |
+          bash scripts/perf/synthesize-corpus.sh "${PERF_CORPUS_DIR}"
+
+      - name: Run cross-decoder benchmark
+        # -iters 7 + -warmup 1 keeps the job under the timeout
+        # while giving the best-of estimator enough samples.
+        # -output-format defaults to pbm so the cell value tracks
+        # decode work (gobig2's image/png encode is ~150ms on a
+        # 35 Mpx Gray and would otherwise dominate). PDFBox lacks
+        # an ImageIO PBM writer; if ENABLE_PDFBOX flips on, switch
+        # to png so pdfbox cells aren't a sea of skip.
+        run: |
+          mkdir -p "${PERF_OUT_DIR}"
+          decoders="gobig2,jbig2dec,mutool,pdfimages"
+          extra_flags=""
+          output_format="pbm"
+          if [ "${ENABLE_PDFBOX}" = "true" ]; then
+            decoders="${decoders},pdfbox"
+            extra_flags="-pdfbox-jar=./bin/pdfbox-app.jar"
+            output_format="png"
+          fi
+          ./bin/perf-cross \
+            -gobig2-bin=./bin/gobig2 \
+            ${extra_flags} \
+            -extra-corpus-dir="${PERF_CORPUS_DIR}" \
+            -decoders="${decoders}" \
+            -output-format="${output_format}" \
+            -iters=7 \
+            -warmup=1 \
+            -timeout=60s \
+            -out-md="${PERF_OUT_DIR}/cross-decoder.md" \
+            -out-json="${PERF_OUT_DIR}/cross-decoder.json"
+
+      - name: Append results to job summary
+        run: |
+          cat "${PERF_OUT_DIR}/cross-decoder.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload measurement matrix
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: perf-linux-cross-decoder
+          path: |
+            ${{ env.PERF_OUT_DIR }}/cross-decoder.json
+            ${{ env.PERF_OUT_DIR }}/cross-decoder.md
+          retention-days: 90
+          if-no-files-found: error
